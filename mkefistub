@@ -1,0 +1,229 @@
+#!/bin/bash
+
+# mkefistub - creates new EFI boot menu entries with efibootmgr
+# Copyright (C) 2019  Marian Arlt
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+printf "\nmkefistub - Copyright (C) 2019  Marian Arlt\n"
+printf "\nThis program can render your system unbootable in UEFI mode if used incorrectly!"
+printf "\nMake sure you know and understand the details of each option before changing them.\n\n\n"
+
+# Check for package dependency
+pacman -Qi efibootmgr &> /dev/null
+if [[ $? == 1 ]]; then
+	printf "This script requires efibootmgr which is not installed on your system.\n"
+	printf "Want to install right now? [Y/n]: "
+	read -r INSTALLCHOICE
+	if [[ ${INSTALLCHOICE} == "n"} ]]; then
+		exit
+	else
+		pacman -S efibootmgr
+	fi
+fi
+
+# Extract variables from system
+BLK=$(blkid)
+SDX=$(lsblk | grep ' /$' | sed 's/^.*\(sd.\)\(...*\)/\1/')
+DISK=/dev/${SDX}
+ROOT=PARTUUID=$(blkid | grep ${DISK}3 | sed 's/^.*PARTUUID=//' | tr -d '"')
+# Hard coded variables
+PART=1
+LABEL=Obarun
+LOADER=/vmlinuz-linux
+
+# Provide maximum customization of parameters
+printf "\nThe default options are extracted from your system and set to work with a default Obarun Linux install. "
+printf "If you customized your install or are using a different operating system make sure that all the parameters will work.\n"
+printf "\nShow and/or change any of the defaults? [y/N]: "
+read -r DEFAULTCHOICE
+if [[ $DEFAULTCHOICE == "y" ]]; then
+	while true
+	do
+		OPTIONS=("--disk $DISK" "--part $PART" "--label \"$LABEL\"" "--loader $LOADER" '--unicode "root='$ROOT'"')
+		PS3=$'\nChoose a parameter to change [1-'${#OPTIONS[@]}'] or confirm ['$((${#OPTIONS[@]}+1))']: '
+		select OPT in "${OPTIONS[@]}" "Confirm";
+		do
+			case $REPLY in
+				1)	printf "%s" "--disk ";		read -r DISK;		break;;
+				2)	printf "%s" "--part ";		read -r PART;		break;;
+				3)	printf "%s" "--label ";		read -r LABEL;		break;;
+				4)	printf "%s" "--loader ";	read -r LOADER;		break;;
+				5)	printf "\n${BLK}\n\nroot=";	read -r ROOT;		break;;
+				$((${#OPTIONS[@]}+1)) )								break 2;;
+				*) printf "$REPLY is not a valid option!\n";		break;;
+			esac
+		done
+	done
+fi
+
+# Prompt for swap kernel parameter
+printf "\nAdd resume kernel parameter for swap? [y/N]: "
+read -r SWAPCHOICE
+if [[ $SWAPCHOICE == "y" ]]; then
+	printf "\n${BLK}\n\nresume="; read -r SWAP
+fi
+
+# Prompt for microcode kernel parameter
+printf "\nAdd ucode kernel parameter for microcode? [y/N]: "
+read -r UCODECHOICE
+if [[ $UCODECHOICE == "y" ]]; then
+	OPTIONS=("Intel" "AMD")
+	PS3=$'\nPlease choose your platform [1-2]: '
+	select OPT in "${OPTIONS[@]}";
+	do
+		UCODE=$(echo "${OPTIONS[($REPLY-1)]}" | sed 's/./\L&/g')
+		pacman -Qi ${UCODE}-ucode &> /dev/null
+		if [[ $? == 1 ]]; then
+			printf "\n\033[1m\033[31m[ERROR]\033[0m ${OPTIONS[($REPLY-1)]} microcode package is not installed!\n"
+			OPTIONS=("Ignore and not use parameter" "Exit script")
+			PS3=$'\nHow do you want to proceed? [1-2]: '
+			select OPT in "${OPTIONS[@]}";
+			do
+				case $REPLY in
+					1) break 2;;
+					2) printf "\n"; exit
+				esac
+			done
+		fi
+		break
+	done
+fi
+
+# Offer a revision of made changes
+printf "\nReview your changes? [y/N]: "
+read -r REVIEWCHOICE
+if [[ ${REVIEWCHOICE} == "y" ]]; then
+	while true
+	do
+		UCODE=$(echo ${UCODE} | sed 's/./\L&/g')
+		OPTIONS=("--disk $DISK" "--part $PART" "--label \"$LABEL\"" "--loader $LOADER" '--unicode "root='$ROOT'"')
+		if [[ ${SWAPCHOICE} == "y" ]]; then
+			OPTIONS+=('--unicode "resume='${SWAP}'"')
+		fi
+		if [[ ${UCODECHOICE} == "y" ]]; then
+			OPTIONS+=('--unicode "initrd=\'${UCODE}'-ucode.img"')
+		fi
+		PS3=$'\nChoose a parameter to change [1-'${#OPTIONS[@]}'] or confirm ['$((${#OPTIONS[@]}+1))']: '
+		select OPT in "${OPTIONS[@]}" "Confirm";
+		do
+			if [[ ${SWAPCHOICE} == "y" ]] && [[ ${UCODECHOICE} == "y" ]]; then
+				case $REPLY in
+					1)	printf "%s" "--disk ";		read -r DISK;		break;;
+					2)	printf "%s" "--part ";		read -r PART;		break;;
+					3)	printf "%s" "--label ";		read -r LABEL;		break;;
+					4)	printf "%s" "--loader ";	read -r LOADER;		break;;
+					5)	printf "\n${BLK}\n\nroot=";	read -r ROOT;		break;;
+					6)  printf "\n${BLK}\n\nresume=";	read -r SWAP;	break;;
+					7)	printf "platform=";			read -r UCODE;		break;;
+					$((${#OPTIONS[@]}+1)) )								break 2;;
+					*) printf "$REPLY is not a valid option!\n";		break;;
+				esac
+			elif [[ ${SWAPCHOICE} == "y" ]]; then
+				case $REPLY in
+					1)	printf "%s" "--disk ";		read -r DISK;		break;;
+					2)	printf "%s" "--part ";		read -r PART;		break;;
+					3)	printf "%s" "--label ";		read -r LABEL;		break;;
+					4)	printf "%s" "--loader ";	read -r LOADER;		break;;
+					5)	printf "\n${BLK}\n\nroot=";	read -r ROOT;		break;;
+					6)  printf "\n${BLK}\n\nresume=";	read -r SWAP;	break;;
+					$((${#OPTIONS[@]}+1)) )								break 2;;
+					*) printf "$REPLY is not a valid option!\n";		break;;
+				esac
+			elif [[ ${UCODECHOICE} == "y" ]]; then
+				case $REPLY in
+					1)	printf "%s" "--disk ";		read -r DISK;		break;;
+					2)	printf "%s" "--part ";		read -r PART;		break;;
+					3)	printf "%s" "--label ";		read -r LABEL;		break;;
+					4)	printf "%s" "--loader ";	read -r LOADER;		break;;
+					5)	printf "\n${BLK}\n\nroot=";	read -r ROOT;		break;;
+					6)  printf "platform=";			read -r UCODE;		break;;
+					$((${#OPTIONS[@]}+1)) )								break 2;;
+					*) printf "$REPLY is not a valid option!\n";		break;;
+				esac
+			else		
+				case $REPLY in
+					1)	printf "%s" "--disk ";		read -r DISK;		break;;
+					2)	printf "%s" "--part ";		read -r PART;		break;;
+					3)	printf "%s" "--label ";		read -r LABEL;		break;;
+					4)	printf "%s" "--loader ";	read -r LOADER;		break;;
+					5)	printf "\n${BLK}\n\nroot=";	read -r ROOT;		break;;
+					$((${#OPTIONS[@]}+1)) )								break 2;;
+					*) printf "$REPLY is not a valid option!\n";		break;;
+				esac
+			fi
+		done
+	done
+fi
+
+# Additional kernel parameters
+UCODE=$(echo ${UCODE} | sed 's/./\L&/g')
+printf "\nInclude additional kernel parameters? [y/N]: "
+read -r KERNELCHOICE
+if [[ ${KERNELCHOICE} == "y" ]]; then
+	printf "\nSeparate multiple parameters with white space.\n"
+	read -e KERNELPARAMS
+fi
+
+# Gather all conditional parameters
+OPTIONALPARAMS=()
+if [[ ${SWAPCHOICE} == "y" ]]; then
+	OPTIONALPARAMS+=("resume=${SWAP}")
+fi
+if [[ ${KERNELCHOICE} == "y" ]]; then
+	OPTIONALPARAMS+=("${KERNELPARAMS}")
+fi
+if [[ ${UCODECHOICE} == "y" ]]; then
+	OPTIONALPARAMS+=('initrd=\'${UCODE}'-ucode.img')
+fi
+
+# Test for existing entry with the same label and create
+efibootmgr | grep $LABEL &> /dev/null
+if [[ $? == 0 ]]; then
+	printf "\n\033[1m\033[31m[WARNING]\033[0m A boot entry with the same label already exists!\n"
+	OPTIONS=("Overwrite existing" "Make a new label")
+	PS3=$'\nHow do you want to create your entry? [1-2]: '
+	select OPT in "${OPTIONS[@]}";
+	do
+		case $REPLY in
+			1)	ENTRY=$(efibootmgr | grep $LABEL | sed -r 's/[^0-9]*//g')
+				efibootmgr -b ${ENTRY} -B
+				printf "\n%s\n" "Removed boot entry with number ${ENTRY}."
+				sleep 1
+				efibootmgr -c -q -d ${DISK} -p ${PART} -L "${LABEL}" -l ${LOADER} -u 'root='${ROOT}' ro '"${OPTIONALPARAMS[*]}"' initrd=\initramfs-linux.img'
+				printf "\n%s\n" "Created entry with the following command:"
+				printf "\n%s" 'efibootmgr -c -d '${DISK}' -p '${PART}' -L "'${LABEL}'" -l '${LOADER}' -u "root='${ROOT}' ro '"${OPTIONALPARAMS[*]}"' initrd=\initramfs-linux.img"'
+				break;;
+
+			2)	printf "%s" "--label "; read LABEL
+				printf "\n%s\n" "Changed label name to ${LABEL}."
+				sleep 1
+				efibootmgr -c -q -d ${DISK} -p ${PART} -L "${LABEL}" -l ${LOADER} -u 'root='${ROOT}' ro '"${OPTIONALPARAMS[*]}"' initrd=\initramfs-linux.img'
+				printf "\n%s\n" "Created entry with the following command:"
+				printf "\n%s" 'efibootmgr -c -d '${DISK}' -p '${PART}' -L "'${LABEL}'" -l '${LOADER}' -u "root='${ROOT}' ro '"${OPTIONALPARAMS[*]}"' initrd=\initramfs-linux.img"'
+				break;;
+		esac
+	done
+else
+	sleep 1
+	efibootmgr -c -q -d ${DISK} -p ${PART} -L "${LABEL}" -l ${LOADER} -u 'root='${ROOT}' ro '"${OPTIONALPARAMS[*]}"' initrd=\initramfs-linux.img'
+	printf "\n%s\n" "Created entry with the following command:"
+	printf "\n%s" 'efibootmgr -c -d '${DISK}' -p '${PART}' -L "'${LABEL}'" -l '${LOADER}' -u "root='${ROOT}' ro '"${OPTIONALPARAMS[*]}"' initrd=\initramfs-linux.img"'
+fi
+
+printf "\n\nWould you like to see a verbose output of efibootmgr? [y/N]: "
+read -r DEBUGCHOICE
+if [[ ${DEBUGCHOICE} == "y" ]]; then
+	efibootmgr -v
+fi
